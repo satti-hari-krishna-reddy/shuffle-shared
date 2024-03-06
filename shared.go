@@ -9400,7 +9400,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Successfully got app %s", fileId)
 
 	app.ReferenceUrl = ""
-
 	type AppParser struct {
 		Success bool   `json:"success"`
 		OpenAPI []byte `json:"openapi"`
