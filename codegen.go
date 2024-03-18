@@ -901,7 +901,7 @@ func NewEndPointPythonCode () string{
                     continue
 
         return parsed_headers
-
+	
 	def parse_queries(self, queries):
 		parsed_queries = {}
 
