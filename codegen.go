@@ -841,9 +841,15 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 func NewEndPointPythonCode () string{	
 	pythonCode := `		
+<<<<<<< HEAD
+    def fix_url(self, url):
+		if "hhttp" in url:
+			url = url.replace("hhttp", "http")
+=======
     def fix_url(self, url):
         if "hhttp" in url:
             url = url.replace("hhttp", "http")
+>>>>>>> 261b86ec6d3f72d170ac9b72c381c878f9ce0cfa
 
         if "http:/" in url and not "http://" in url:
             url = url.replace("http:/", "http://", -1)
@@ -879,7 +885,7 @@ func NewEndPointPythonCode () string{
         else:
             raise ValueError(f"Invalid HTTP method: {method}")
 
-    def parse_content(self, headers):
+    def parse_headers(self, headers):
         parsed_headers = {}
         if headers:
             split_headers = headers.split("\n")
@@ -901,7 +907,7 @@ func NewEndPointPythonCode () string{
                     continue
 
         return parsed_headers
-	
+		
 	def parse_queries(self, queries):
 		parsed_queries = {}
 
@@ -929,7 +935,6 @@ func NewEndPointPythonCode () string{
 
 		return parsed_queries
 
-
     def new_endpoint(self, method="", base_url="", headers="", queries="", path="", username="", password="", verify=False, req_body=""):
         url = self.fix_url(base_url)
 
@@ -942,9 +947,9 @@ func NewEndPointPythonCode () string{
 		if path and not path.startswith('/'):
 		    path = '/' + path
 
-		url += path
+	    url += path
 
-        parsed_headers = self.parse_content(headers)
+        parsed_headers = self.parse_headers(headers)
         parsed_queries = self.parse_queries(queries)
 
         verify = self.checkverify(verify)
