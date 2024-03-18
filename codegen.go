@@ -841,15 +841,9 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 func NewEndPointPythonCode () string{	
 	pythonCode := `		
-<<<<<<< HEAD
-    def fix_url(self, url):
-		if "hhttp" in url:
-			url = url.replace("hhttp", "http")
-=======
     def fix_url(self, url):
         if "hhttp" in url:
             url = url.replace("hhttp", "http")
->>>>>>> 261b86ec6d3f72d170ac9b72c381c878f9ce0cfa
 
         if "http:/" in url and not "http://" in url:
             url = url.replace("http:/", "http://", -1)
