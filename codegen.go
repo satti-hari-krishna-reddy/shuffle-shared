@@ -839,7 +839,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	return functionname, data
 }
 
-func NewEndPointPythonCode () string{
+func NewEndPointPythonCode () string{	
 	pythonCode := `		
     def fix_url(self, url):
         if "hhttp" in url:
@@ -902,7 +902,35 @@ func NewEndPointPythonCode () string{
 
         return parsed_headers
 
-    def new_endpoint(self, method="", headers="", base_url="", path="", username="", password="", verify=True, queries="", req_body=""):
+	def parse_queries(self, queries):
+		parsed_queries = {}
+
+		if not queries:
+			return parsed_queries
+
+		cleaned_queries = queries.strip()
+
+		if not cleaned_queries:
+			return parsed_queries
+
+		cleaned_queries = " ".join(cleaned_queries.split())
+		splitted_queries = cleaned_queries.split("&")
+		self.logger.info(splitted_queries)
+		for query in splitted_queries:
+
+			if "=" not in query:
+				self.logger.info("Skipping as there is no = in the query")
+				continue
+			key, value = query.split("=")
+			if not key.strip() or not value.strip():
+				self.logger.info("Skipping because either key or value is not present in query")
+				continue
+			parsed_queries[key.strip()] = value.strip()
+
+		return parsed_queries
+
+
+    def new_endpoint(self, method="", base_url="", headers="", queries="", path="", username="", password="", verify=False, req_body=""):
         url = self.fix_url(base_url)
 
         try:
@@ -911,11 +939,13 @@ func NewEndPointPythonCode () string{
             self.logger.error(e)
             return {"error": str(e)}
 
-        if path:
-            url += '/' + path
+		if path and not path.startswith('/'):
+		    path = '/' + path
+
+		url += path
 
         parsed_headers = self.parse_content(headers)
-        parsed_queries = self.parse_content(queries)
+        parsed_queries = self.parse_queries(queries)
 
         verify = self.checkverify(verify)
 
@@ -949,7 +979,7 @@ func NewEndPointPythonCode () string{
 func AddNewEndPoint ()  (WorkflowAppAction , string) {
 
 	parameters := []WorkflowAppActionParameter{}
-    pyCode := NewEndPointPythonCode()
+	pyCode := NewEndPointPythonCode()
 
 	parameters = append(parameters, WorkflowAppActionParameter{
 		Name:          "method",
@@ -987,11 +1017,22 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 	})
 
 	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "queries",
+		Description:   "queries to be included in the url",
+		Multiline:     true,
+		Required:      false,
+		Example: "user_id=123&category=tech",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	parameters = append(parameters, WorkflowAppActionParameter{
 		Name:          "path",
 		Description:   "the path to add to the base url",
 		Multiline:     false,
 		Required:      false,
-		Example:       "users/details/profile/settings",
+		Example:       "users/profile/settings",
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1025,17 +1066,6 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     false,
 		Required:      false,
 		Example:       "True",
-		Schema: SchemaDefinition{
-			Type: "string",
-		},
-	})
-
-	parameters = append(parameters, WorkflowAppActionParameter{
-		Name:          "queries",
-		Description:   "queries to be included in the url",
-		Multiline:     true,
-		Required:      false,
-		Example: "user_id:123\ncategory:tech",
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
