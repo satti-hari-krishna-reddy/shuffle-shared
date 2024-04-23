@@ -5712,75 +5712,46 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 			userApps = append(userApps, innerApp)
 		}
 	} else {
-		cursorStr := ""
 		uniqueDocs := make(map[string]bool)
-
+	
 		query1 := datastore.NewQuery(indexName).
 			Filter("owner =", userId).
-			Order("-edited").Limit(10)
+			Order("-edited").Limit(1000)
+		it := project.Dbclient.Run(ctx, query1)
 		for {
-
-			it := project.Dbclient.Run(ctx, query1)
-			for {
-				innerApp := WorkflowApp{}
-				_, err := it.Next(&innerApp)
-				if err == iterator.Done {
-					break
-				}
-				if err != nil {
-					log.Printf("[ERROR] Failed fetching results: %v", err)
-					break
-				}
-				userApps = append(userApps, innerApp)
-				uniqueDocs[innerApp.ID] = true
+			innerApp := WorkflowApp{}
+			_, err := it.Next(&innerApp)
+			if err == iterator.Done {
+				break
 			}
-			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("Cursor error: %v", err)
+				log.Printf("[ERROR] Failed fetching results: %v", err)
 				break
 			}
-			if cursorStr == "" || cursorStr == nextCursor.String() {
-				break
-			}
-
-			cursorStr = nextCursor.String()
-			query1 = query1.Start(nextCursor)
+			userApps = append(userApps, innerApp)
+			uniqueDocs[innerApp.ID] = true
 		}
-		cursorStr = ""
-
+	
 		query2 := datastore.NewQuery(indexName).
 			Filter("contributors =", userId).
-			Order("-edited").Limit(10)
+			Order("-edited").Limit(1000)
+		it = project.Dbclient.Run(ctx, query2)
 		for {
-			it := project.Dbclient.Run(ctx, query2)
-			
-			for {
-				innerApp := WorkflowApp{}
-				_, err := it.Next(&innerApp)
-				if err == iterator.Done {
-					break
-				}
-				if err != nil {
-					log.Printf("[ERROR] Failed fetching results: %v", err)
-					break
-				}
-				if _, ok := uniqueDocs[innerApp.ID]; !ok {
-					userApps = append(userApps, innerApp)
-				}
+			innerApp := WorkflowApp{}
+			_, err := it.Next(&innerApp)
+			if err == iterator.Done {
+				break
 			}
-			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("Cursor error: %v", err)
+				log.Printf("[ERROR] Failed fetching results: %v", err)
 				break
 			}
-			if cursorStr == "" || cursorStr == nextCursor.String() {
-				break
+			if _, ok := uniqueDocs[innerApp.ID]; !ok {
+				userApps = append(userApps, innerApp)
 			}
-
-			cursorStr = nextCursor.String()
-			query2 = query2.Start(nextCursor)
 		}
 	}
+	
 	if project.CacheDb {
 		data, err := json.Marshal(userApps)
 		if err == nil {
