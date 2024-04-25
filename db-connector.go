@@ -5713,45 +5713,42 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 		}
 	} else {
 		uniqueDocs := make(map[string]bool)
-	
+		query1Results := []WorkflowApp{}
+
 		query1 := datastore.NewQuery(indexName).
 			Filter("owner =", userId).
 			Order("-edited").Limit(1000)
-		it := project.Dbclient.Run(ctx, query1)
-		for {
-			innerApp := WorkflowApp{}
-			_, err := it.Next(&innerApp)
-			if err == iterator.Done {
-				break
-			}
-			if err != nil {
-				log.Printf("[ERROR] Failed fetching results: %v", err)
-				break
-			}
-			userApps = append(userApps, innerApp)
-			uniqueDocs[innerApp.ID] = true
+
+		_, err := project.Dbclient.GetAll(ctx, query1, &query1Results)
+		if err != nil {
+			log.Printf("[WARNING] Error getting user apps: %s", err)
+			return []WorkflowApp{}, err
 		}
-	
+
+		for _, userApp := range query1Results {
+			uniqueDocs[userApp.ID] = true
+			userApps = append(userApps, userApp)
+		}
+
+		query2Results := []WorkflowApp{}
+
 		query2 := datastore.NewQuery(indexName).
 			Filter("contributors =", userId).
 			Order("-edited").Limit(1000)
-		it = project.Dbclient.Run(ctx, query2)
-		for {
-			innerApp := WorkflowApp{}
-			_, err := it.Next(&innerApp)
-			if err == iterator.Done {
-				break
-			}
-			if err != nil {
-				log.Printf("[ERROR] Failed fetching results: %v", err)
-				break
-			}
-			if _, ok := uniqueDocs[innerApp.ID]; !ok {
-				userApps = append(userApps, innerApp)
+
+		_, err = project.Dbclient.GetAll(ctx, query2, &query2Results)
+		if err != nil {
+			log.Printf("[WARNING] Error getting user apps: %s", err)
+			return []WorkflowApp{}, err
+		}
+
+		for _, userApp := range query2Results {
+			if _, ok := uniqueDocs[userApp.ID]; !ok {
+				userApps = append(userApps, userApp)
 			}
 		}
 	}
-	
+
 	if project.CacheDb {
 		data, err := json.Marshal(userApps)
 		if err == nil {
