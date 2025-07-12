@@ -7572,3 +7572,163 @@ func BuildFinalDetails(filteredApps []WorkflowApp, finalActions []FinalAppAction
 
 	return details
 }
+
+
+func generateWorkflowJson(ctx context.Context, input QueryInput, user User) (string, error) {
+
+	systemMessage := fmt.Sprintf(`You are a senior security automation assistant helping build workflows for an automation platform called shuffle that connects security tools through triggers and actions (similar to SOAR platforms). 
+
+You’ll receive vague or messy user inputs describing a security automation task they want to perform.
+
+Your job is to:
+
+1. Understand what the user is trying to automate.
+2. Break the task into **clear, chronological steps** that describe exactly what needs to happen.
+3. Explicitly **separate steps that happen inside the automation system** from those that must be **manually configured or exist externally**, like SIEM, 3rd-party APIs, user authentication, or system setup.
+4. Determine whether the automation is event-driven — meaning something external (like a SIEM or alerting tool) must notify the system when to begin.
+If so, this means a trigger must be configured inside the automation tool (e.g. Shuffle) to receive that signal.
+
+Use a Webhook trigger (HTTP trigger) when some external system needs to send data to start the automation.
+→ Mention that this will generate a webhook URL, which the user must configure in the external system.
+
+Use a Scheduler trigger when the automation should run periodically (e.g. every 5 minutes). No external setup is needed here.
+
+If the task doesn't rely on external events (e.g. "fetch all tickets from Jira"), and can start on its own or via schedule, then skip trigger setup.
+
+The goal is to make sure we don't forget any setup required to make the automation actually run.
+5. Make sure **no step is skipped** — even if it's obvious to an expert.
+6. Ensure the steps are **atomic**, meaning no two actions are bundled into one.
+7. For any action that depends on another step’s output (e.g. extracting a value, passing it to another app), **call it out** clearly.
+8. Dont duplicate steps that were already handled externally (e.g. don’t re-check that login failures > 5 if the alert already filtered for that) and avoid unnecessary steps or validations or things that were not asked by the user.
+
+The goal is to produce a smart, complete breakdown so a later stage can turn it into a machine-readable workflow.
+You will receive a user input describing the task they want to automate.
+
+Here is the user input:
+	%s`, input.Query)
+
+	contentOutput, err := RunAiQuery(systemMessage, input.Query)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
+		return "", err
+	}
+		if len(contentOutput) == 0 {
+		log.Printf("[ERROR] AI response is empty")
+		return "", errors.New("AI response is empty")
+	}
+	log.Printf("[DEBUG] AI response: %s", contentOutput)
+
+	// lets try to convert this into json format 
+
+	systemMessage = fmt.Sprintf(`You are a senior security automation assistant helping build workflows for an automation platform called shuffle that connects security tools through triggers and actions (similar to SOAR platforms).
+	
+
+ Your job is to convert a sequence of natural-language automation steps into a structured actionable JSON format. 
+
+This format represents a generic security workflow that includes:
+
+- Triggers (like HTTP/Webhook)
+- Actions (calling known apps and their actions with parameters)
+- Data passing between steps (e.g., extract values, save them, reference them in a later step)
+
+You must assume that:
+
+- All apps mentioned are available
+- All needed actions exist in those apps
+- Parameters required for those actions are known
+- All external filtering, validation, and setup have already been completed (e.g. authentication, permission, alert thresholds)
+
+You should:
+
+- Ignore **manual or external setup steps** (e.g. creating API keys, registering Azure apps, configuring SIEM filters)
+- Do NOT repeat validations that were already handled externally (e.g. don’t re-check that login failures > 5 if the alert already filtered for that)
+- Start from **the moment the trigger is received**, and build **only the in-platform automation steps**
+- Invent clean, logical app and action names based on step description
+- Chain steps using variables, each action can use output from previous steps, each action returns a structured information about the result and the result contain some the variables that can be used in the next steps and so on
+- Use **snake_case** for action names and parameters
+- Overall the JSON structure should represent a sequence of chronological steps that can be executed in order with no missing pieces.
+- Use this JSON structure:
+
+
+{
+  "triggers": [ ... ],
+  "actions": [ ... ]
+}
+
+Where each action might look like this 
+{
+  "app_name": "string",
+  "app_version": "string",
+  "description": "string",
+  "app_id": "string",
+  "errors": ["string"],
+  "id": "string",
+  "name": "string",
+  "parameters": [
+    {
+      "description": "string",
+      "id": "string",
+      "name": "string",
+      "example": "string",
+      "value": "string",
+      "multiline": false,
+      "multiselect": false,
+      "options": ["string"],
+      "action_field": "string",
+      "variant": "string",
+      "required": true,
+      "configuration": false,
+      "tags": ["string"],
+      "schema": {},
+      "skip_multicheck": false,
+      "value_replace": [],
+      "unique_toggled": false,
+      "error": "string",
+      "hidden": false
+    },
+	...
+  ]
+}
+
+The fields above must exist for every action.
+
+You can assume the app, app_id, and parameters as fake data — just make them feel real.
+
+Actions can refer to results from previous steps using $label.field.path, for example:
+"value": "$http_1.body.result"
+where http_1 is the label of an earlier action.
+
+Ensure later steps chain properly from earlier ones — like parsing a response, then using a field from that in another action.
+
+Assign your own fake labels (like http_1, parse_json_1, etc.) to help with referencing.
+
+Value Referencing (Chaining):
+If an action needs a value from a previous step, use this format:
+
+$step_label.output.key
+
+Example: if step1 has label http_1, and it returned body and you want a field named result, use:
+
+$http_1.body.result
+
+
+dont include "json" word in the output, just return the JSON structure as is, without any markdown or back ticks
+
+Here are the high level atomic breakdown of steps of the  for the AI:
+%s
+`, contentOutput)
+
+	contentOutput, err = RunAiQuery(systemMessage, input.Query)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
+		return "", err
+	}
+		if len(contentOutput) == 0 {
+		log.Printf("[ERROR] AI response is empty")
+		return "", errors.New("AI response is empty")
+	}
+	log.Printf("[DEBUG] AI response: %s", contentOutput)
+
+	// var workflowJson []Workflow
+	return contentOutput, nil
+}
