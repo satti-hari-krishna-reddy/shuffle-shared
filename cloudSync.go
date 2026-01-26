@@ -913,6 +913,18 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		}
 	}
 
+	// Fix Me: Add daily stats update script to append daily stats immdediately after day change and reset monthly stats on month change
+	lastMonthlyReset := validationOrgStats.LastMonthlyResetMonth
+	currentMonth := time.Now().UTC().Month()
+	if int(lastMonthlyReset) != int(currentMonth) {
+		validationOrgStats = handleDailyCacheUpdate(validationOrgStats)
+
+		err = SetOrgStatistics(ctx, *validationOrgStats, validationOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting org statistics for monthly reset for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
+		}
+	}
+
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
 	if validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
 		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
@@ -2113,25 +2125,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	if os.Getenv("AGENT_TEST_MODE") == "true" {
 		log.Printf("[DEBUG][%s] AGENT_TEST_MODE enabled - using mock tool execution", execution.ExecutionId)
 
-		// Call mock function instead of real Singul
-		// Mock function signature:
-		// func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, string, error)
-		//
-		// Inputs needed:
-		// - execution: Full execution context (ExecutionId, Authorization, Workflow, etc)
-		// - decision: The decision to execute (Tool, Action, Fields, etc)
-		//
-		// Returns: (rawResponse []byte, debugUrl string, appname string, error)
-		// - rawResponse: The mock tool result (what Singul would return)
-		// - debugUrl: Debug URL (can be empty in tests)
-		// - appname: The app name (decision.Tool)
-		// - error: Any error that occurred
-		//
-		// The mock function should:
-		// 1. Load stored result based on decision.Tool + decision.Action
-		// 2. Return it in the same format as real Singul
-		// 3. The caller (RunAgentDecisionAction) will handle posting to /streams
-
+		// Call mock handler
 		return RunAgentDecisionMockHandler(execution, decision)
 	}
 
@@ -2163,8 +2157,24 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	parsedFields := schemaless.TranslateBadFieldFormats(newFields)
 
+	// Check if this is a GET request and strip the body field if present
+	// GET requests should not have a body and can cause 400 errors
+	methodValue := ""
+	for _, field := range parsedFields {
+		if strings.ToLower(field.Key) == "method" {
+			methodValue = strings.ToUpper(field.Value)
+			break
+		}
+	}
+
 	oldFields := []Valuereplace{}
 	for _, field := range parsedFields {
+		// Skip body field for GET requests
+		if methodValue == "GET" && strings.ToLower(field.Key) == "body" {
+			log.Printf("[INFO][%s] Stripping 'body' field from GET request to %s", execution.ExecutionId, decision.Tool)
+			continue
+		}
+
 		oldFields = append(oldFields, Valuereplace{
 			Key:   field.Key,
 			Value: field.Value,

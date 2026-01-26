@@ -115,10 +115,22 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"https://br.shuffler.io",
 			"https://in.shuffler.io",
 
+			// Related projects (maybe)
 			"https://*.singul.io",
 			"https://singul.io",
+			"https://*.shutdown.no",
+			"https://shutdown.no",
+
+			// Local testing
 			"http://localhost:3002",
 			"http://localhost:3000",
+
+			// For a new test project
+			"https://cases.shuffler.io",
+			"https://security.shuffler.io",
+			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
+			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
+			"https://preview--shuffle-cases.lovable.app",
 		}
 
 		if len(origin) > 0 {
@@ -242,6 +254,8 @@ func ConstructSessionCookie(value string, expires time.Time) *http.Cookie {
 	if project.Environment == "cloud" {
 		c.Domain = ".shuffler.io"
 		c.Secure = true
+		//c.SameSite = http.SameSiteLaxMode
+		c.SameSite = http.SameSiteNoneMode
 	}
 
 	return &c
@@ -2169,7 +2183,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		appAuth.App.LargeImage = app.LargeImage
 	}
 
-	// If editing, reset verification?
+	// If manual editing, reset verification
 	appAuth.Validation = TypeValidation{}
 
 	appAuth.OrgId = user.ActiveOrg.Id
@@ -3448,7 +3462,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 		user, err := GetSessionNew(ctx, sessionToken)
 		if err != nil {
-			log.Printf("[WARNING] No valid session token for ID %s. Setting cookie to expire. May cause fallback problems.", sessionToken)
+			log.Printf("[WARNING] No valid session token for '%s'. Setting cookie to expire. May cause fallback problems.", sessionToken)
 
 			if resp != nil {
 				newCookie := constructSessionDeleteCookie()
@@ -15229,7 +15243,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if len(userdata.Session) != 0 && !changeActiveOrg {
+	// Had to set this due to session hashing rollback 
+	if len(userdata.Session) != 0 && len(userdata.Session) == 36 && !changeActiveOrg {
 		log.Printf("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(8 * time.Hour)
 
@@ -15256,6 +15271,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		if project.Environment == "cloud" {
 			newCookie.Name = "__session"
 			newCookie.Domain = ".singul.io"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
+			newCookie.Domain = ".shutdown.no"
 			http.SetCookie(resp, newCookie)
 		}
 
@@ -15320,6 +15339,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		if project.Environment == "cloud" {
 			newCookie.Name = "__session"
 			newCookie.Domain = ".singul.io"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
+			newCookie.Domain = ".shutdown.no"
 			http.SetCookie(resp, newCookie)
 		}
 
@@ -15839,6 +15862,23 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	if sendRequest && len(resultData) > 0 {
 		//log.Printf("[INFO][%s] Should send subflow request to backendURL %s. Data: %s!", executionParent, backendUrl, string(resultData))
 
+		if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
+			backendUrl = os.Getenv("BASE_URL")
+
+			if project.Environment == "cloud" {
+				backendUrl = "https://shuffler.io"
+	
+				if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+					backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+				}
+	
+				if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+					backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+				}
+	
+			}
+		}
+
 		streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
 		req, err := http.NewRequest(
 			"POST",
@@ -16282,17 +16322,32 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		if os.Getenv("AGENT_TEST_MODE") == "true" {
 			log.Printf("[DEBUG][%s] AGENT_TEST_MODE: Action '%s' not found in results, creating placeholder", workflowExecution.ExecutionId, actionResult.Action.ID)
 
+			// Try to get the initial agent output from cache
+			ctx := context.Background()
+			actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+			placeholderResult := `{"status":"RUNNING","decisions":[]}`
+
+			cache, err := GetCache(ctx, actionCacheId)
+			if err == nil {
+				// Found cached agent output - use it!
+				cacheData := []byte(cache.([]uint8))
+				log.Printf("[DEBUG][%s] Found cached agent output for placeholder (size: %d bytes)", workflowExecution.ExecutionId, len(cacheData))
+				placeholderResult = string(cacheData)
+			} else {
+				log.Printf("[DEBUG][%s] No cached agent output found, using empty placeholder", workflowExecution.ExecutionId)
+			}
+
 			// Create a placeholder result for the agent action
-			placeholderResult := ActionResult{
+			placeholder := ActionResult{
 				Action:      actionResult.Action,
 				ExecutionId: workflowExecution.ExecutionId,
-				Result:      `{"status":"RUNNING","decisions":[]}`,
+				Result:      placeholderResult,
 				StartedAt:   time.Now().Unix(),
 				CompletedAt: 0,
 				Status:      "EXECUTING",
 			}
 
-			workflowExecution.Results = append(workflowExecution.Results, placeholderResult)
+			workflowExecution.Results = append(workflowExecution.Results, placeholder)
 			foundActionResultIndex = len(workflowExecution.Results) - 1
 
 			log.Printf("[DEBUG][%s] Created placeholder result at index %d", workflowExecution.ExecutionId, foundActionResultIndex)
@@ -20352,6 +20407,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		return workflowExecution, err
 	}
 
+	if debug { 
+		log.Printf("[DEBUG] Action: %#v (%s)", action.Name, action.AppID)
+	}
+
 	if appId != action.AppID {
 
 		// Used for standalone runs stared on /agents
@@ -20386,6 +20445,23 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			}
 
 			SetWorkflowExecution(ctx, exec, true)
+
+			if os.Getenv("AGENT_TEST_MODE") == "true" {
+				var bodyMap map[string]interface{}
+				if err := json.Unmarshal(body, &bodyMap); err == nil {
+					if mockToolCalls, ok := bodyMap["mock_tool_calls"]; ok {
+						mockCacheKey := fmt.Sprintf("agent_mock_%s", exec.ExecutionId)
+						mockData, _ := json.Marshal(mockToolCalls)
+						err := SetCache(ctx, mockCacheKey, mockData, 10)
+						if err != nil {
+							log.Printf("[ERROR] Failed to set cache the mock_tool_calls data for the exection %s", exec.ExecutionId)
+						}
+						log.Printf("[DEBUG] Cached mock tool calls for execution %s", exec.ExecutionId)
+					} else {
+						log.Printf("[WARNING] No mock_tool_calls found in the request body")
+					}
+				}
+			}
 
 			action, err := HandleAiAgentExecutionStart(exec, action, false)
 			if err != nil {
@@ -32085,12 +32161,23 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 	handledAuth := []string{}
 	timenow := time.Now().Unix() * 1000
+	runtimeLocationName := ""
+	for _, action := range exec.Workflow.Actions {
+		if len(action.Environment) > 0 { 
+			runtimeLocationName = action.Environment
+			break
+		}
+	}
 
 	//log.Printf("\n\n[DEBUG][%s] STARTING VALIDATION WITH %d results and %d actions\n\n", exec.ExecutionId, len(exec.Results), len(workflow.Actions))
 	for _, result := range exec.Results {
 		// FIXME: Skipping anything that outright fails right now
 		if result.Status == "SKIPPED" {
 			continue
+		}
+
+		if len(runtimeLocationName) == 0 && len(result.Action.Environment) > 0 {
+			runtimeLocationName = result.Action.Environment
 		}
 
 		found := false
@@ -32248,6 +32335,12 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 						auth.Validation.Valid = true
 						authUpdated = true
 					}
+
+					// Check if it is more than 10 days ago. If so, update again.
+					tenDaysMicroseconds := int64(432000000)
+					if timenow-auth.Validation.LastValid > tenDaysMicroseconds {
+						authUpdated = true
+					}
 				}
 
 				if authUpdated {
@@ -32257,6 +32350,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 						auth.Validation.LastValid = timenow
 					}
 
+					auth.Validation.Environment = runtimeLocationName
 					auth.Validation.WorkflowId = workflow.ID
 					auth.Validation.ExecutionId = exec.ExecutionId
 					auth.Validation.NodeId = result.Action.ID
@@ -32455,6 +32549,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 	// Updating the workflow to show the right status every time for now
 	workflowChanged = true
+	workflow.Validation.Environment = runtimeLocationName
 	workflow.Validation.ValidationRan = true
 	workflow.Validation.ExecutionId = exec.ExecutionId
 	if workflowChanged {
