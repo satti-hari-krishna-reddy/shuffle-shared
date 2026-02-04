@@ -6980,6 +6980,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	ctx := context.Background()
 
+	// Track AI credits for cloud (only on first call)
+	if project.Environment == "cloud" && !createNextActions {
+		if len(execution.ExecutionOrg) > 0 {
+			IncrementCache(ctx, execution.ExecutionOrg, "ai_executions", 1)
+			log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", execution.ExecutionOrg, execution.ExecutionId)
+		}
+	}
+
 	// Create the OpenAI body struct
 	systemMessage := `INTRODUCTION 
 You are a general AI agent in the Shuffle platform which makes decisions based on user input. You should output a list of decisions based on the same user input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%, is not the last action AND it can't be done with an API. These actions are a last resort. Use Markdown with focus on human readability. Do NOT ask about networking or authentication unless explicitly specified. 
@@ -7531,6 +7539,16 @@ FINALISING:
 		log.Printf("\n\n\n[DEBUG] BODY for AI Agent (first request): %s\n\n\n", string(initialAgentRequestBody))
 	}
 
+	apiKey := os.Getenv("AI_API_KEY")
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENAI_API_KEY")
+	}
+
+	aiUrl := os.Getenv("AI_API_URL")
+	if aiUrl == "" {
+		aiUrl = "https://api.openai.com"
+	}
+
 	// Hardcoded for now
 	aiNode := Action{}
 	aiNode.AppID = "5d19dd82517870c68d40cacad9b5ca91"
@@ -7544,12 +7562,8 @@ FINALISING:
 	aiNode.Parameters = []WorkflowAppActionParameter{
 		WorkflowAppActionParameter{
 			Name:  "url",
-			Value: "",
+			Value: aiUrl,
 		},
-		//WorkflowAppActionParameter{
-		//	Name:  "apikey",
-		//	Value: "",
-		//},
 		WorkflowAppActionParameter{
 			Name:  "body",
 			Value: string(initialAgentRequestBody),
@@ -7558,6 +7572,18 @@ FINALISING:
 			Name:  "headers",
 			Value: "Content-Type: application/json\nAccept: application/json",
 		},
+		WorkflowAppActionParameter{
+			Name:  "_shuffle_ai_agent",
+			Value: "true",
+		},
+	}
+
+	if len(apiKey) > 0 {
+		aiNode.Parameters = append(aiNode.Parameters, WorkflowAppActionParameter{
+			Name:          "apikey",
+			Value:         apiKey,
+			Configuration: true,
+		})
 	}
 
 	// To ensure we get the context of an execution properly
