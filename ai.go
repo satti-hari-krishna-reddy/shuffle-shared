@@ -7661,6 +7661,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 						decidedApps += lowername + ", "
 					}
+						//  Let's inject http.
+					if !strings.Contains(decidedApps, "http") {
+						decidedApps += "http, "
+					}
 				}
 
 				if len(decidedApps) > 0 {
