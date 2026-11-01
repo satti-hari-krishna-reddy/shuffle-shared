@@ -1,6 +1,7 @@
 package shuffle
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -60,7 +61,7 @@ func evaluateLocalAI(ctx context.Context, execution WorkflowExecution) bool {
 	}
 
 	return true
-}
+}  // looks good verfied by Hari
 
 func getAgentMainSystemPrompt(enableQuestions bool) string {
 	// Due to usually NOT wanting a question back, but pure run
@@ -157,7 +158,7 @@ func getAgentMainSystemPrompt(enableQuestions bool) string {
 
 	[
 	{
-		"i": 0, // For paralell actions, re-use the same index for related actions 
+		"i": 0, // For parallel actions, re-use the same index for related actions. NEVER mix "ask" or "approval_required": true with other parallel actions in the same "i".
 		"action": "exact_name", // Name of the function/action WITHOUT parameters. Use "finish" if done/answering, "ask" if asking. JUST add the name.
 		"category": "singul", // Use "singul" for actions. Use "finish" if done. Use "standalone" ONLY if asking
 		"tool": "tool_name", // Name of the tool. Use "core" for finish/ask
@@ -174,12 +175,16 @@ func getAgentMainSystemPrompt(enableQuestions bool) string {
 	}
 	]`, enableQuestionsString)
 
+	//	10. NEVER share the same step index "i" between an "ask" decision or an "approval_required": true decision and any parallel tool execution. Any "ask" or "approval_required": true decision MUST have its own standalone step index "i".
+
+
 	return systemMessage
-}
+} // looks good verfied by hari
 
 type AgentNodeParams struct {
 	UserInput       string
 	Skill           string
+	Memory          string
 	RawTools        string
 	EnableQuestions bool
 	ExecutionMode   string
@@ -193,16 +198,26 @@ type AgentNodeParams struct {
 
 func parseNodeParams(startNode Action) AgentNodeParams {
 	params := AgentNodeParams{
+		Memory:      "shuffle_db",
 		ImageDetail: openai.ImageURLDetailAuto,
 		Images:      []string{},
 	}
 
+	reasoningOverride := ""
 	for _, param := range startNode.Parameters {
 		switch param.Name {
-		case "input":
-			params.UserInput = param.Value
-		case "template":
-			params.Skill = param.Value
+		case "input", "prompt":
+			if len(param.Value) > 0 || len(params.UserInput) == 0 {
+				params.UserInput = param.Value
+			}
+		case "template", "skill":
+			if len(param.Value) > 0 || len(params.Skill) == 0 {
+				params.Skill = param.Value
+			}
+		case "memory":
+			if len(strings.TrimSpace(param.Value)) > 0 {
+				params.Memory = strings.TrimSpace(param.Value)
+			}
 		case "enable_questions":
 			params.EnableQuestions = strings.ToLower(param.Value) == "true"
 		case "execution_mode":
@@ -218,7 +233,7 @@ func parseNodeParams(startNode Action) AgentNodeParams {
 		case "shuffle_ai_reasoning_effort_override":
 			override := strings.ToLower(strings.TrimSpace(param.Value))
 			if len(override) > 0 {
-				params.ReasoningEffort = override
+				reasoningOverride = override
 			}
 		case "image":
 			if strings.HasPrefix(param.Value, "http://") || strings.HasPrefix(param.Value, "https://") {
@@ -254,12 +269,20 @@ func parseNodeParams(startNode Action) AgentNodeParams {
 		}
 	}
 
+	if len(reasoningOverride) > 0 {
+		params.ReasoningEffort = reasoningOverride
+	}
+
 	return params
 }
 
 // Resolves $workflow variables and incoming branch conditions using Shuffle Tools (repeat_back_to_me).
 // Returns (updatedNode, branchSkipped, skipReason).
 func resolveVars(execution WorkflowExecution, startNode Action) (Action, bool, string) {
+	if standalone {
+		return startNode, false, ""
+	}
+
 	parsingBody := map[string]string{}
 	for _, param := range startNode.Parameters {
 		if strings.Contains(param.Value, "$") {
@@ -340,6 +363,10 @@ func resolveVars(execution WorkflowExecution, startNode Action) (Action, bool, s
 	unmarshalMapErr := json.Unmarshal([]byte(toolsResult.Result), &mappedResult)
 	if unmarshalMapErr != nil {
 		log.Printf("[ERROR][%s] Failed parsing resolved variables map: %s", execution.ExecutionId, unmarshalMapErr)
+		return startNode, false, ""
+	}
+	if len(mappedResult) == 0 {
+		return startNode, false, ""
 	}
 
 	reasonVal, hasReason := mappedResult["reason"]
@@ -402,7 +429,7 @@ func loadSkill(ctx context.Context, skill string, rawTools string, execution Wor
 	}
 
 	return systemRule, skillContext, requiredApps, rawTools
-}
+} // looks good to me
 
 // Formats a single WorkflowAppAction into a Python-style function signature line for the LLM prompt.
 func formatActionSignature(actionNumber int, appAction WorkflowAppAction, previousDescription string) (string, string) {
@@ -487,7 +514,7 @@ func formatActionSignature(actionNumber int, appAction WorkflowAppAction, previo
 	signatureLine = strings.ReplaceAll(signatureLine, "\n", " ")
 
 	return signatureLine, updatedPreviousDescription
-}
+} // looks like lots of string parsing and stuff what its doing at this point  like are we giving the AI enough context about things or are we just trancating
 
 // Discovers actions for each configured tool and builds the tool signature block for the prompt.
 func buildToolsContext(ctx context.Context, rawTools string, requiredApps []string) ([]string, string, string) {
@@ -586,7 +613,7 @@ func buildToolsContext(ctx context.Context, rawTools string, requiredApps []stri
 	}
 
 	return decidedApps, allowedActionString, specificAppMetadata
-}
+} // fine
 
 // Builds the USER CONTEXT block containing current user, organization, location, and available tool signatures.
 func buildUserMetadata(ctx context.Context, execution WorkflowExecution, decidedApps []string, specificAppMetadata string) string {
@@ -632,7 +659,7 @@ func buildUserMetadata(ctx context.Context, execution WorkflowExecution, decided
 	}
 
 	return metadata
-}
+} // looks good 
 
 // Resolves the final reasoning effort setting from global config, environment variable, and node parameter override.
 func resolveReasoningEffort(paramReasoningEffort string) string {
@@ -654,7 +681,7 @@ func resolveReasoningEffort(paramReasoningEffort string) string {
 	}
 
 	return resolvedEffort
-}
+} // yeah good
 
 // Builds a user ChatCompletionMessage, attaching image URLs as MultiContent only when images are present.
 func buildUserMessageWithImages(textContent string, imageUrls []string, imageDetail openai.ImageURLDetail) openai.ChatCompletionMessage {
@@ -686,7 +713,7 @@ func buildUserMessageWithImages(textContent string, imageUrls []string, imageDet
 		Role:         openai.ChatMessageRoleUser,
 		MultiContent: parts,
 	}
-}
+} // alright looks fine too
 
 // Assembles the OpenAI ChatCompletionRequest with the exact message layout expected by the agent prompt.
 func buildCompletionRequest(
@@ -799,16 +826,16 @@ func buildCompletionRequest(
 	})
 
 	return completionRequest
-}
+} // wait is it how it is in the old code or did we fixed anuy thing here i see we have USER ANSWERS and USER REQUEST too ??
 
-// Executes the LLM call via RunAiQuery and invokes HandleAiAgentExecutionStart2 when finished.
+// Executes the LLM call via RunAiQuery and returns the raw text output and parsed ChatCompletionResponse.
 func runAgentLLM(
 	ctx context.Context,
 	execution WorkflowExecution,
 	startNode Action,
 	params AgentNodeParams,
 	completionRequest openai.ChatCompletionRequest,
-) {
+) (string, openai.ChatCompletionResponse, error) {
 	recorder := httptest.NewRecorder()
 
 	callInfo := AiCallInfo{
@@ -825,9 +852,8 @@ func runAgentLLM(
 
 	rawOutput, err := RunAiQuery(ctx, callInfo, "", "", completionRequest)
 	if err != nil {
-		log.Printf("[ERROR][%s] AI Agent: Failed running AI query for action %s: %s", execution.ExecutionId, startNode.ID, err)
-		// Callback to HandleAiAgentExecutionStart2 with error
-		return
+		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s action=%s error=%q", execution.ExecutionId, execution.Workflow.OrgId, startNode.ID, err.Error())
+		return rawOutput, openai.ChatCompletionResponse{}, err
 	}
 
 	openaiResponse := openai.ChatCompletionResponse{}
@@ -858,8 +884,8 @@ func runAgentLLM(
 		}
 	}
 
-	// Next: pass rawOutput & openaiResponse back to HandleAiAgentExecutionStart2
-}
+	return rawOutput, openaiResponse, nil
+} // looks fine to me
 
 // Generates a short 8-character URL-safe base64 ID for a single AgentDecision.
 func generateDecisionId() string {
@@ -869,7 +895,7 @@ func generateDecisionId() string {
 		return uuid.NewV4().String()[:8]
 	}
 	return base64.RawURLEncoding.EncodeToString(randomBytes)
-}
+} // good too but wait why its trimming something there ?
 
 // Self-corrects the 'i' step index on newly parsed LLM decisions so they always start cleanly at nextStepIndex.
 // Decisions that share the same raw 'i' in the LLM output stay grouped together (parallel),
@@ -889,10 +915,10 @@ func normalizeDecisionIndices(decisions []AgentDecision, nextStepIndex int) []Ag
 
 	currentStep := nextStepIndex
 	previousRawI := decisions[0].I
-	for decisionPos := range decisions {
-		if decisions[decisionPos].I != previousRawI {
+	for decisionPos, decision := range decisions {
+		if decision.I != previousRawI {
 			currentStep++
-			previousRawI = decisions[decisionPos].I
+			previousRawI = decision.I
 		}
 		decisions[decisionPos].I = currentStep
 	}
@@ -940,16 +966,26 @@ func parseLLMDecisions(
 
 	parsedDecisions = normalizeDecisionIndices(parsedDecisions, nextStepIndex)
 
-	for decisionPos, decision := range parsedDecisions {
-		if len(decision.RunDetails.Id) == 0 {
-			decision.RunDetails.Id = generateDecisionId()
-		}
-
+	validDecisions := make([]AgentDecision, 0, len(parsedDecisions))
+	for _, decision := range parsedDecisions {
 		normalizedAction := strings.ToLower(strings.TrimSpace(decision.Action))
 		normalizedCategory := strings.ToLower(strings.TrimSpace(decision.Category))
-		expectedCat := expectedCategory(normalizedAction)
-		if normalizedCategory != expectedCat {
-			decision.Category = expectedCat
+		if len(normalizedAction) == 0 && normalizedCategory != "finish" {
+			continue
+		}
+		if normalizedAction == "finish" || normalizedCategory == "finish" {
+			decision.Action = "finish"
+			decision.Category = "finish"
+		} else {
+			decision.Action = strings.TrimSpace(decision.Action)
+			expectedCat := expectedCategory(normalizedAction)
+			if normalizedCategory != expectedCat {
+				decision.Category = expectedCat
+			}
+		}
+
+		if len(decision.RunDetails.Id) == 0 {
+			decision.RunDetails.Id = generateDecisionId()
 		}
 
 		for fieldPos, field := range decision.Fields {
@@ -961,10 +997,14 @@ func parseLLMDecisions(
 			}
 		}
 
-		parsedDecisions[decisionPos] = decision
+		validDecisions = append(validDecisions, decision)
 	}
 
-	return parsedDecisions, cleanedDecisionString, nil
+	if len(validDecisions) == 0 {
+		return nil, cleanedDecisionString, errors.New("no valid actionable AgentDecision found in LLM output")
+	}
+
+	return validDecisions, cleanedDecisionString, nil
 }
 
 // Strips bulky HTTP headers and cookies from a tool's raw HTTPOutput JSON string.
@@ -1084,7 +1124,7 @@ type AgentHistoryContext struct {
 }
 
 // Processes completed decisions to build the cleaned HISTORY JSON, extracted screenshots, user answers, and failure tracking for the next LLM call.
-func prepareHistoryContext(decisions []AgentDecision) (AgentHistoryContext, error) {
+func prepareHistoryContext(execution WorkflowExecution, decisions []AgentDecision) (AgentHistoryContext, error) {
 	historyCtx := AgentHistoryContext{
 		NextStepIndex:       0,
 		MarshalledDecisions: []byte{},
@@ -1096,6 +1136,9 @@ func prepareHistoryContext(decisions []AgentDecision) (AgentHistoryContext, erro
 	}
 
 	lastFinishedIndex := -1
+	failureCount := 0
+	successCount := 0
+	consecutiveFailuresByTool := make(map[string]int)
 	cleanedDecisions := make([]AgentDecision, 0, len(decisions))
 
 	for _, decision := range decisions {
@@ -1103,6 +1146,19 @@ func prepareHistoryContext(decisions []AgentDecision) (AgentHistoryContext, erro
 
 		if promptDecision.I > lastFinishedIndex {
 			lastFinishedIndex = promptDecision.I
+		}
+
+		toolActionKey := strings.ToLower(strings.TrimSpace(promptDecision.Tool)) + ":" + strings.ToLower(strings.TrimSpace(promptDecision.Action))
+
+		if promptDecision.RunDetails.Status == "FAILURE" {
+			failureCount++
+			consecutiveFailuresByTool[toolActionKey]++
+			promptDecision.Runs = fmt.Sprintf("%d", consecutiveFailuresByTool[toolActionKey])
+		} else if promptDecision.RunDetails.Status == "FINISHED" || promptDecision.RunDetails.Status == "SUCCESS" {
+			successCount++
+			consecutiveFailuresByTool[toolActionKey] = 0
+		} else if promptDecision.RunDetails.Status == "IGNORED" {
+			consecutiveFailuresByTool[toolActionKey] = 0
 		}
 
 		for _, field := range promptDecision.Fields {
@@ -1115,12 +1171,24 @@ func prepareHistoryContext(decisions []AgentDecision) (AgentHistoryContext, erro
 			promptDecision.RunDetails.RawResponse = stripHttpHeadersAndCookies(promptDecision.RunDetails.RawResponse)
 
 			if promptDecision.DataFilter != "" {
+				originalBytesLen := len(promptDecision.RunDetails.RawResponse)
 				reducedBytes := ReduceAgentResponseData(
 					[]byte(promptDecision.RunDetails.RawResponse),
 					promptDecision.DataFilter,
 					promptDecision.FieldsNeeded,
 				)
 				promptDecision.RunDetails.RawResponse = string(reducedBytes)
+				if debug {
+					log.Printf("[DEBUG][%s] AI_AGENT_REDUCE: decision=%s tool=%s data_filter=%s fields=%v original_bytes=%d reduced_bytes=%d",
+						execution.ExecutionId,
+						promptDecision.RunDetails.Id,
+						promptDecision.Tool,
+						promptDecision.DataFilter,
+						promptDecision.FieldsNeeded,
+						originalBytesLen,
+						len(promptDecision.RunDetails.RawResponse),
+					)
+				}
 			}
 
 			if promptDecision.Action == "post_take_screenshot" {
@@ -1132,22 +1200,24 @@ func prepareHistoryContext(decisions []AgentDecision) (AgentHistoryContext, erro
 			}
 		}
 
-		if promptDecision.RunDetails.Status == "FAILURE" {
-			failuresForThisTool := 0
-			for _, otherDecision := range decisions {
-				if otherDecision.Action == promptDecision.Action &&
-					otherDecision.Tool == promptDecision.Tool &&
-					otherDecision.RunDetails.Status == "FAILURE" {
-					failuresForThisTool++
-				}
-			}
-			promptDecision.Runs = fmt.Sprintf("%d", failuresForThisTool)
-			if failuresForThisTool > historyCtx.MaxFailuresForOneTool {
-				historyCtx.MaxFailuresForOneTool = failuresForThisTool
-			}
-		}
-
 		cleanedDecisions = append(cleanedDecisions, promptDecision)
+	}
+
+	for _, activeFailures := range consecutiveFailuresByTool {
+		if activeFailures > historyCtx.MaxFailuresForOneTool {
+			historyCtx.MaxFailuresForOneTool = activeFailures
+		}
+	}
+
+	if debug {
+		log.Printf("[DEBUG][%s] AI_AGENT: org=%s decisions_total=%d failures=%d successes=%d last_index=%d",
+			execution.ExecutionId,
+			execution.Workflow.OrgId,
+			len(decisions),
+			failureCount,
+			successCount,
+			lastFinishedIndex,
+		)
 	}
 
 	historyCtx.NextStepIndex = lastFinishedIndex + 1
@@ -1202,18 +1272,43 @@ func loadAgentStateFromDB(
 	params AgentNodeParams,
 	originalUserInput string,
 	allowedActionString string,
-) (WorkflowExecution, AgentOutput) {
+	incomingAgentOutput AgentOutput,
+) (WorkflowExecution, Action, AgentOutput) {
 	if !standalone {
+		callerResults := execution.Results
 		dbExecution, dbErr := GetWorkflowExecution(ctx, execution.ExecutionId)
 		if dbErr == nil && dbExecution != nil && len(dbExecution.ExecutionId) > 0 {
 			execution = *dbExecution
+			if len(callerResults) > 0 {
+				existingIds := make(map[string]bool, len(execution.Results))
+				for _, r := range execution.Results {
+					existingIds[r.Action.ID] = true
+				}
+				for _, callerResult := range callerResults {
+					if !existingIds[callerResult.Action.ID] {
+						execution.Results = append(execution.Results, callerResult)
+					}
+				}
+			}
 		}
+	}
+
+	if len(execution.Workflow.OrgId) == 0 && len(execution.ExecutionOrg) > 0 {
+		execution.Workflow.OrgId = execution.ExecutionOrg
+	}
+	if len(execution.ExecutionOrg) == 0 && len(execution.Workflow.OrgId) > 0 {
+		execution.ExecutionOrg = execution.Workflow.OrgId
 	}
 
 	agentOutput := AgentOutput{}
 	for _, existingResult := range execution.Results {
 		if existingResult.Action.ID != startNode.ID {
 			continue
+		}
+
+		// Preserve resolved parameters saved on Turn 0 if a subsequent caller passed an unresolved Action
+		if len(existingResult.Action.Parameters) > 0 {
+			startNode = existingResult.Action
 		}
 
 		rawResultText := existingResult.Result
@@ -1234,6 +1329,10 @@ func loadAgentStateFromDB(
 		break
 	}
 
+	if len(incomingAgentOutput.Decisions) > len(agentOutput.Decisions) {
+		agentOutput = incomingAgentOutput
+	}
+
 	allowedActions := []string{}
 	if len(allowedActionString) > 0 {
 		allowedActions = strings.Split(allowedActionString, ",")
@@ -1245,25 +1344,48 @@ func loadAgentStateFromDB(
 	agentOutput.CompletedAt = 0
 
 	if agentOutput.StartedAt == 0 {
-		agentOutput.StartedAt = time.Now().UnixMilli()
+		if execution.StartedAt > 0 {
+			agentOutput.StartedAt = execution.StartedAt
+			const maxSecondsTimestamp int64 = 10_000_000_000
+			if agentOutput.StartedAt < maxSecondsTimestamp {
+				agentOutput.StartedAt *= 1000
+			}
+		} else {
+			agentOutput.StartedAt = time.Now().UnixMilli()
+		}
 	}
-	if len(params.UserInput) > 0 {
-		agentOutput.Input = params.UserInput
+	if len(agentOutput.Input) == 0 {
+		if len(params.UserInput) > 0 {
+			agentOutput.Input = params.UserInput
+		} else if len(execution.ExecutionArgument) > 0 {
+			agentOutput.Input = execution.ExecutionArgument
+		}
 	}
-	if len(agentOutput.OriginalInput) == 0 && len(originalUserInput) > 0 {
-		agentOutput.OriginalInput = originalUserInput
+	if len(agentOutput.OriginalInput) == 0 {
+		if len(originalUserInput) > 0 {
+			agentOutput.OriginalInput = originalUserInput
+		} else if len(agentOutput.Input) > 0 {
+			agentOutput.OriginalInput = agentOutput.Input
+		}
 	}
-	if len(params.Skill) > 0 {
+	if len(agentOutput.Memory) == 0 {
+		if len(params.Memory) > 0 {
+			agentOutput.Memory = params.Memory
+		} else {
+			agentOutput.Memory = "shuffle_db"
+		}
+	}
+	if len(agentOutput.Template) == 0 && len(params.Skill) > 0 {
 		agentOutput.Template = params.Skill
 	}
-	if len(params.ExecutionMode) > 0 {
+	if len(agentOutput.ExecutionMode) == 0 && len(params.ExecutionMode) > 0 {
 		agentOutput.ExecutionMode = params.ExecutionMode
 	}
 	if len(allowedActions) > 0 {
 		agentOutput.AllowedActions = allowedActions
 	}
 
-	return execution, agentOutput
+	return execution, startNode, agentOutput
 }
 
 // Ensures agentOutput.Decisions always ends with a completed "finish" decision and no earlier decision is left in "RUNNING".
@@ -1273,8 +1395,8 @@ func ensureFinalFinishDecision(
 	nowMs int64,
 	isAborted bool,
 ) []AgentDecision {
-	for decisionIndex := range decisions {
-		currentStatus := decisions[decisionIndex].RunDetails.Status
+	for decisionIndex, decision := range decisions {
+		currentStatus := decision.RunDetails.Status
 		if currentStatus == "RUNNING" || (isAborted && currentStatus == "WAITING") {
 			if isAborted {
 				decisions[decisionIndex].RunDetails.Status = "ABORTED"
@@ -1282,7 +1404,7 @@ func ensureFinalFinishDecision(
 				decisions[decisionIndex].RunDetails.Status = "FAILURE"
 			}
 			decisions[decisionIndex].RunDetails.CompletedAt = nowMs
-			if len(decisions[decisionIndex].RunDetails.RawResponse) == 0 && len(finalReason) > 0 {
+			if len(decision.RunDetails.RawResponse) == 0 && len(finalReason) > 0 {
 				decisions[decisionIndex].RunDetails.RawResponse = finalReason
 			}
 		}
@@ -1369,6 +1491,17 @@ func saveAgentStateToDB(
 				agentOutput.Template = param.Value
 				break
 			}
+		}
+	}
+	if len(agentOutput.Memory) == 0 {
+		for _, param := range startNode.Parameters {
+			if param.Name == "memory" && len(strings.TrimSpace(param.Value)) > 0 {
+				agentOutput.Memory = strings.TrimSpace(param.Value)
+				break
+			}
+		}
+		if len(agentOutput.Memory) == 0 {
+			agentOutput.Memory = "shuffle_db"
 		}
 	}
 
@@ -1551,12 +1684,22 @@ func notifyWorkflowStream(
 		go IncrementCache(ctx, execution.Workflow.OrgId, "agent_executions_failed", 1)
 	}
 
+	actualToolCalls := 0
+	for _, d := range agentOutput.Decisions {
+		actionLower := strings.ToLower(strings.TrimSpace(d.Action))
+		catLower := strings.ToLower(strings.TrimSpace(d.Category))
+		if actionLower == "finish" || catLower == "finish" || actionLower == "ask" || actionLower == "question" {
+			continue
+		}
+		actualToolCalls++
+	}
+
 	log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=%s duration=%ds tool_calls=%d llm_calls=%d prompt_tokens=%d completion_tokens=%d total_tokens=%d",
 		execution.ExecutionId,
 		execution.Workflow.OrgId,
 		agentOutput.Status,
 		durationSeconds,
-		len(agentOutput.Decisions),
+		actualToolCalls,
 		agentOutput.LLMCallCount,
 		agentOutput.PromptTokens,
 		agentOutput.CompletionTokens,
@@ -1799,10 +1942,64 @@ func sendUserWaitNotification(
 	}
 }
 
-// Executes the parsed LLM decisions for this turn step-by-step (by index 'I'):
-// - All non-finish decisions are appended to agentOutput.Decisions upfront so they are never lost if aborted.
+// Returns true if a tool decision that required approval has been approved by the user and has not yet executed its tool call.
+func isDecisionApprovedByUser(decision AgentDecision) bool {
+	if !decision.ApprovalRequired || decision.Action == "ask" || decision.Action == "question" {
+		return false
+	}
+	trimmedResponse := strings.TrimSpace(decision.RunDetails.RawResponse)
+	if trimmedResponse == "Approved by user" || strings.HasPrefix(trimmedResponse, "Approved by user") {
+		return true
+	}
+	if len(trimmedResponse) > 0 {
+		return false
+	}
+	for _, field := range decision.Fields {
+		if field.Key == "approve" && strings.HasPrefix(strings.TrimSpace(field.Value), "Approved to continue") {
+			return true
+		}
+	}
+	return false
+}
+
+// Returns true if a decision represents the final "finish" step (either by Action or Category).
+func isFinishDecision(decision AgentDecision) bool {
+	return strings.EqualFold(strings.TrimSpace(decision.Action), "finish") ||
+		strings.EqualFold(strings.TrimSpace(decision.Category), "finish")
+}
+
+// Returns true if a decision must pause and wait for the user (either an "ask"/"question" step or an unapproved tool requiring approval).
+func requiresUserWait(decision AgentDecision) bool {
+	if decision.Action == "ask" || decision.Action == "question" {
+		return true
+	}
+	return !standalone &&
+		decision.ApprovalRequired &&
+		!isDecisionApprovedByUser(decision) &&
+		(decision.Category == "singul" || decision.Category == "standalone")
+}
+
+// Returns true if a decision still needs runAgentTools to execute it or wait on it.
+func isDecisionPending(decision AgentDecision) bool {
+	return decision.RunDetails.Status == "WAITING" ||
+		decision.RunDetails.Status == "RUNNING" ||
+		isDecisionApprovedByUser(decision)
+}
+
+// Returns true if any decision in the list is still pending tool execution or user input.
+func hasPendingAgentDecisions(decisions []AgentDecision) bool {
+	for _, decision := range decisions {
+		if isDecisionPending(decision) {
+			return true
+		}
+	}
+	return false
+}
+
+// Executes pending agent decisions step-by-step (by index 'I'):
+// - Any newly parsed non-finish LLM decisions are appended to agentOutput.Decisions upfront.
 // - Decisions with the same step 'I' run in parallel via runTool.
-// - Decisions requiring user input ("ask"/"question" or ApprovalRequired) notify the user and park in AgentStateWaiting.
+// - Decisions requiring user input ("ask"/"question" or unapproved ApprovalRequired) pause in AgentStateWaiting.
 func runAgentTools(
 	ctx context.Context,
 	execution WorkflowExecution,
@@ -1810,10 +2007,11 @@ func runAgentTools(
 	agentOutput AgentOutput,
 	parsedDecisions []AgentDecision,
 ) (WorkflowExecution, AgentOutput, error) {
+	isNewLLMTurn := len(parsedDecisions) > 0
 	turnStartIndex := len(agentOutput.Decisions)
 
 	for _, decision := range parsedDecisions {
-		if len(decision.Action) == 0 || decision.Action == "finish" || decision.Category == "finish" {
+		if len(decision.Action) == 0 || isFinishDecision(decision) {
 			continue
 		}
 		if len(decision.RunDetails.Id) == 0 {
@@ -1824,22 +2022,40 @@ func runAgentTools(
 	}
 
 	totalDecisions := len(agentOutput.Decisions)
-	if totalDecisions == turnStartIndex {
+	if totalDecisions > turnStartIndex {
+		turnSlice := agentOutput.Decisions[turnStartIndex:totalDecisions]
+		sort.SliceStable(turnSlice, func(firstPos, secondPos int) bool {
+			return turnSlice[firstPos].I < turnSlice[secondPos].I
+		})
+	}
+
+	firstPendingIndex := -1
+	for decisionIndex, decision := range agentOutput.Decisions {
+		if isDecisionPending(decision) {
+			firstPendingIndex = decisionIndex
+			break
+		}
+	}
+	if firstPendingIndex == -1 {
 		return execution, agentOutput, nil
 	}
 
-	// Guarantee the new turn's decisions are ordered by step index 'I'
-	turnSlice := agentOutput.Decisions[turnStartIndex:totalDecisions]
-	sort.SliceStable(turnSlice, func(firstPos, secondPos int) bool {
-		return turnSlice[firstPos].I < turnSlice[secondPos].I
-	})
-
-	for stepStart := turnStartIndex; stepStart < totalDecisions; {
-		currentStepIndex := agentOutput.Decisions[stepStart].I
-		stepEnd := stepStart + 1
-		for stepEnd < totalDecisions && agentOutput.Decisions[stepEnd].I == currentStepIndex {
-			stepEnd++
+	// Group pending decision indices by step number 'I' (decisions with the same 'I' run in parallel)
+	var stepGroups [][]int
+	for decisionIndex := firstPendingIndex; decisionIndex < totalDecisions; decisionIndex++ {
+		if len(stepGroups) == 0 || agentOutput.Decisions[decisionIndex].I != agentOutput.Decisions[decisionIndex-1].I {
+			stepGroups = append(stepGroups, []int{decisionIndex})
+		} else {
+			lastGroupIndex := len(stepGroups) - 1
+			stepGroups[lastGroupIndex] = append(stepGroups[lastGroupIndex], decisionIndex)
 		}
+	}
+
+	waitingForUser := false
+
+	for _, stepDecisionIndices := range stepGroups {
+		currentStepIndex := agentOutput.Decisions[stepDecisionIndices[0]].I
+		lastIndexInStep := stepDecisionIndices[len(stepDecisionIndices)-1]
 
 		if isExecutionAbortedByUser(ctx, execution.ExecutionId) {
 			log.Printf("[INFO][%s] Workflow execution was aborted by user before step %d. Stopping tool execution.", execution.ExecutionId, currentStepIndex)
@@ -1850,17 +2066,17 @@ func runAgentTools(
 		stepStartedAt := time.Now().UnixMilli()
 		hasRunnableToolsInStep := false
 
-		for decisionIndex := stepStart; decisionIndex < stepEnd; decisionIndex++ {
+		for _, decisionIndex := range stepDecisionIndices {
 			decision := agentOutput.Decisions[decisionIndex]
+			if !isDecisionPending(decision) {
+				continue
+			}
 			decision.RunDetails.StartedAt = stepStartedAt
 
-			requiresUserWait := decision.Action == "ask" ||
-				decision.Action == "question" ||
-				(!standalone && decision.ApprovalRequired && (decision.Category == "singul" || decision.Category == "standalone"))
-
-			if requiresUserWait {
+			if requiresUserWait(decision) {
 				decision.RunDetails.Status = "WAITING"
 			} else {
+				decision.ApprovalRequired = false
 				decision.RunDetails.Status = "RUNNING"
 				hasRunnableToolsInStep = true
 			}
@@ -1876,12 +2092,18 @@ func runAgentTools(
 		stepFailed := false
 		stepWaiting := false
 
-		for decisionIndex := stepStart; decisionIndex < stepEnd; decisionIndex++ {
+		// Immutable snapshots for this parallel group so goroutines never race on stateMutex writes
+		stepExecSnapshot := execution
+		stepOutputSnapshot := agentOutput
+
+		for _, decisionIndex := range stepDecisionIndices {
 			currentDecision := agentOutput.Decisions[decisionIndex]
 
 			if currentDecision.RunDetails.Status == "WAITING" {
 				stepWaiting = true
-				sendUserWaitNotification(ctx, execution, startNode, currentDecision)
+				continue
+			}
+			if currentDecision.RunDetails.Status != "RUNNING" {
 				continue
 			}
 
@@ -1889,7 +2111,7 @@ func runAgentTools(
 			go func(targetIndex int, decisionToRun AgentDecision) {
 				defer toolWaitGroup.Done()
 
-				finishedDecision := runTool(execution, agentOutput, decisionToRun)
+				finishedDecision := runTool(stepExecSnapshot, stepOutputSnapshot, decisionToRun)
 
 				stateMutex.Lock()
 				agentOutput.Decisions[targetIndex] = finishedDecision
@@ -1899,6 +2121,7 @@ func runAgentTools(
 				if finishedDecision.RunDetails.Status == "WAITING" {
 					stepWaiting = true
 				}
+				execution, agentOutput, _, _ = saveAgentStateToDB(ctx, execution, startNode, agentOutput, AgentStateRunning, "")
 				stateMutex.Unlock()
 			}(decisionIndex, currentDecision)
 		}
@@ -1911,19 +2134,16 @@ func runAgentTools(
 			return execution, agentOutput, errors.New("Agent run was aborted by user")
 		}
 
-		// If this step failed, mark any un-executed subsequent steps in this turn as ABORTED so nothing is left dangling
-		if stepFailed && stepEnd < totalDecisions {
-			stoppedAt := time.Now().UnixMilli()
-			for remainingIndex := stepEnd; remainingIndex < totalDecisions; remainingIndex++ {
-				agentOutput.Decisions[remainingIndex].RunDetails.Status = "ABORTED"
-				agentOutput.Decisions[remainingIndex].RunDetails.CompletedAt = stoppedAt
-				agentOutput.Decisions[remainingIndex].RunDetails.RawResponse = "Skipped because an earlier step failed"
-			}
+		// If this step failed or paused for user input, drop any un-executed future steps from this turn
+		// so they are not left in WAITING/ABORTED (the next LLM turn will re-evaluate with the updated results).
+		if (stepFailed || stepWaiting) && lastIndexInStep+1 < len(agentOutput.Decisions) {
+			agentOutput.Decisions = agentOutput.Decisions[:lastIndexInStep+1]
 		}
 
 		targetStepState := AgentStateRunning
 		if stepWaiting && !stepFailed {
 			targetStepState = AgentStateWaiting
+			waitingForUser = true
 		}
 
 		var saveErr error
@@ -1932,56 +2152,569 @@ func runAgentTools(
 			return execution, agentOutput, saveErr
 		}
 
+		// Only notify the user after all runnable tools in a new LLM step have finished and state is saved as WAITING
+		if stepWaiting && !stepFailed && isNewLLMTurn {
+			for _, decisionIndex := range stepDecisionIndices {
+				if agentOutput.Decisions[decisionIndex].RunDetails.Status == "WAITING" {
+					sendUserWaitNotification(ctx, execution, startNode, agentOutput.Decisions[decisionIndex])
+				}
+			}
+		}
+
 		if stepFailed || stepWaiting {
 			break
 		}
+	}
 
-		stepStart = stepEnd
+	if !waitingForUser {
+		_, triggerErr := triggerAgentStart(ctx, execution, startNode, agentOutput, "runAgentTools")
+		if triggerErr != nil {
+			return execution, agentOutput, triggerErr
+		}
 	}
 
 	return execution, agentOutput, nil
 }
 
-func HandleAiAgentExecutionStart2(execution WorkflowExecution, startNode Action, createNextActions bool, callerName string, aiResponseWrapper ...[]byte) (Action, error) {
+type AgentInternalRequest struct {
+	ExecutionId     string          `json:"execution_id"`
+	Authorization   string          `json:"authorization"`
+	StartNode       Action          `json:"start_node"`
+	AgentOutput     AgentOutput     `json:"agent_output"`
+	ParsedDecisions []AgentDecision `json:"parsed_decisions,omitempty"`
+	Caller          string          `json:"caller"`
+}
 
-	// we got an agent here so what ? whats the point ? if its first iteration right now i want to enrich some of the context 
-	// and get the system prompt and user prompt and all that usual stuff
-
-	if callerName == "" {
-		callerName = "UNKNOWN_CALLER"
+// Sends an internal POST request and waits only for the flushed HTTP 202 Accepted ACK line before closing the connection.
+func postAgentInternalWithAck(endpointPath string, payload AgentInternalRequest) error {
+	if standalone {
+		return errors.New("standalone mode uses direct in-process execution")
 	}
 
-	log.Printf("[INFO][%s] AI Agent: HandleAiAgentExecutionStart invoked by caller: '%s' (createNextActions=%t, node=%s, status=%s)", execution.ExecutionId, callerName, createNextActions, startNode.ID, execution.Status)
+	marshalledPayload, marshalErr := json.Marshal(payload)
+	if marshalErr != nil {
+		return marshalErr
+	}
 
+	targetUrl := fmt.Sprintf("%s%s", getBackendBaseUrl(), endpointPath)
+	req, reqErr := http.NewRequest("POST", targetUrl, bytes.NewBuffer(marshalledPayload))
+	if reqErr != nil {
+		return reqErr
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			ResponseHeaderTimeout: 10 * time.Second,
+		},
+	}
+
+	httpResp, doErr := httpClient.Do(req)
+	if doErr != nil {
+		return doErr
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusAccepted {
+		bodyBytes, _ := ioutil.ReadAll(io.LimitReader(httpResp.Body, 1024))
+		return fmt.Errorf("unexpected status %d from %s: %s", httpResp.StatusCode, endpointPath, string(bodyBytes))
+	}
+
+	ackLine, readErr := bufio.NewReader(httpResp.Body).ReadString('\n')
+	if readErr != nil && len(ackLine) == 0 {
+		return fmt.Errorf("failed reading 202 ACK from %s: %w", endpointPath, readErr)
+	}
+
+	return nil
+}
+
+// Validates execution_id + authorization against the DB, immediately flushes HTTP 202 Accepted so the caller can exit, and returns a detached background context.
+func authenticateAndAckAgentInternalRequest(
+	resp http.ResponseWriter,
+	request *http.Request,
+) (context.Context, WorkflowExecution, AgentInternalRequest, bool) {
+	if HandleCors(resp, request) {
+		return nil, WorkflowExecution{}, AgentInternalRequest{}, false
+	}
+
+	// Detached background context so client disconnect after 202 Flush never cancels DB or HTTP calls
 	ctx := context.Background()
 
-	// Metadata = org-specific context
-	// This e.g. makes "me" mean "users in my org" and such
-	metadata := ""
-	if len(execution.Workflow.UpdatedBy) > 0 {
-		metadata += fmt.Sprintf("Current user: %s\n", execution.Workflow.UpdatedBy)
+	bodyBytes, readErr := ioutil.ReadAll(request.Body)
+	if readErr != nil {
+		log.Printf("[ERROR] Failed reading internal agent request body: %s", readErr)
+		resp.WriteHeader(http.StatusBadRequest)
+		_, _ = resp.Write([]byte(`{"success":false,"reason":"Failed reading request body"}`))
+		return nil, WorkflowExecution{}, AgentInternalRequest{}, false
+	}
+
+	var reqPayload AgentInternalRequest
+	if unmarshalErr := json.Unmarshal(bodyBytes, &reqPayload); unmarshalErr != nil {
+		log.Printf("[ERROR] Failed unmarshalling internal agent request body: %s", unmarshalErr)
+		resp.WriteHeader(http.StatusBadRequest)
+		_, _ = resp.Write([]byte(`{"success":false,"reason":"Invalid request JSON"}`))
+		return nil, WorkflowExecution{}, AgentInternalRequest{}, false
+	}
+
+	if len(reqPayload.ExecutionId) == 0 || len(reqPayload.Authorization) == 0 || len(reqPayload.StartNode.ID) == 0 {
+		log.Printf("[WARNING] Missing execution_id, authorization, or start_node in internal agent request")
+		resp.WriteHeader(http.StatusUnauthorized)
+		_, _ = resp.Write([]byte(`{"success":false,"reason":"Missing execution credentials"}`))
+		return nil, WorkflowExecution{}, AgentInternalRequest{}, false
+	}
+
+	execution, execErr := GetWorkflowExecution(ctx, reqPayload.ExecutionId)
+	if execErr != nil || execution == nil {
+		log.Printf("[WARNING][%s] Failed fetching execution in internal agent request: %v", reqPayload.ExecutionId, execErr)
+		resp.WriteHeader(http.StatusUnauthorized)
+		_, _ = resp.Write([]byte(`{"success":false,"reason":"Bad execution mapping (1)"}`))
+		return nil, WorkflowExecution{}, AgentInternalRequest{}, false
+	}
+
+	if execution.Authorization != reqPayload.Authorization {
+		log.Printf("[WARNING][%s] Authorization mismatch in internal agent request", reqPayload.ExecutionId)
+		resp.WriteHeader(http.StatusForbidden)
+		_, _ = resp.Write([]byte(`{"success":false,"reason":"Bad execution mapping (2)"}`))
+		return nil, WorkflowExecution{}, AgentInternalRequest{}, false
 	}
 
 	if len(execution.Workflow.OrgId) == 0 && len(execution.ExecutionOrg) > 0 {
 		execution.Workflow.OrgId = execution.ExecutionOrg
 	}
+	if len(execution.ExecutionOrg) == 0 && len(execution.Workflow.OrgId) > 0 {
+		execution.ExecutionOrg = execution.Workflow.OrgId
+	}
 
-	// Validate On-Prem Configuration immediately
+	resp.Header().Set("Content-Type", "application/json")
+	resp.Header().Set("X-Content-Type-Options", "nosniff")
+	resp.WriteHeader(http.StatusAccepted)
+	_, _ = resp.Write([]byte(`{"success":true,"accepted":true}` + "\n"))
+	if flusher, ok := resp.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	return ctx, *execution, reqPayload, true
+}
+
+// Triggers /api/v1/agent/run_tools2 with 202 Flush ACK to reset the Cloud Run timeout, falling back to in-process runAgentTools if the HTTP handoff fails.
+func triggerAgentToolRunner(
+	ctx context.Context,
+	execution WorkflowExecution,
+	startNode Action,
+	agentOutput AgentOutput,
+	parsedDecisions []AgentDecision,
+	caller string,
+) (WorkflowExecution, AgentOutput, error) {
+	payload := AgentInternalRequest{
+		ExecutionId:     execution.ExecutionId,
+		Authorization:   execution.Authorization,
+		StartNode:       startNode,
+		AgentOutput:     agentOutput,
+		ParsedDecisions: parsedDecisions,
+		Caller:          caller,
+	}
+
+	ackErr := postAgentInternalWithAck("/api/v1/agent/run_tools2", payload)
+	if ackErr == nil {
+		log.Printf("[INFO][%s] Handed off %d decisions to /api/v1/agent/run_tools2 (caller=%s)", execution.ExecutionId, len(parsedDecisions), caller)
+		return execution, agentOutput, nil
+	}
+
+	log.Printf("[WARNING][%s] Handoff to /api/v1/agent/run_tools2 failed (%v) — falling back to in-process runAgentTools", execution.ExecutionId, ackErr)
+	return runAgentTools(ctx, execution, startNode, agentOutput, parsedDecisions)
+}
+
+// Triggers /api/v1/agent/start2 with 202 Flush ACK to reset the Cloud Run timeout, falling back to in-process HandleAiAgentExecutionStart2 if the HTTP handoff fails.
+func triggerAgentStart(
+	ctx context.Context,
+	execution WorkflowExecution,
+	startNode Action,
+	agentOutput AgentOutput,
+	caller string,
+) (Action, error) {
+	payload := AgentInternalRequest{
+		ExecutionId:   execution.ExecutionId,
+		Authorization: execution.Authorization,
+		StartNode:     startNode,
+		AgentOutput:   agentOutput,
+		Caller:        caller,
+	}
+
+	ackErr := postAgentInternalWithAck("/api/v1/agent/start2", payload)
+	if ackErr == nil {
+		log.Printf("[INFO][%s] Handed off next turn to /api/v1/agent/start2 (caller=%s)", execution.ExecutionId, caller)
+		return startNode, nil
+	}
+
+	log.Printf("[WARNING][%s] Handoff to /api/v1/agent/start2 failed (%v) — falling back to in-process HandleAiAgentExecutionStart2", execution.ExecutionId, ackErr)
+	return HandleAiAgentExecutionStart2(ctx, execution, startNode, agentOutput, caller)
+}
+
+// HTTP handler for /api/v1/agent/run_tools2 that validates auth, flushes 202 Accepted immediately, and runs runAgentTools synchronously in this container request.
+func HandleAgentRunTools2(resp http.ResponseWriter, request *http.Request) {
+	ctx, execution, reqPayload, ok := authenticateAndAckAgentInternalRequest(resp, request)
+	if !ok {
+		return
+	}
+
+	_, _, err := runAgentTools(ctx, execution, reqPayload.StartNode, reqPayload.AgentOutput, reqPayload.ParsedDecisions)
+	if err != nil {
+		log.Printf("[WARNING][%s] HandleAgentRunTools2 completed with error: %v", execution.ExecutionId, err)
+	}
+}
+
+// HTTP handler for /api/v1/agent/start2 that validates auth, flushes 202 Accepted immediately, and runs HandleAiAgentExecutionStart2 synchronously in this container request.
+func HandleAgentStart2(resp http.ResponseWriter, request *http.Request) {
+	ctx, execution, reqPayload, ok := authenticateAndAckAgentInternalRequest(resp, request)
+	if !ok {
+		return
+	}
+
+	_, err := HandleAiAgentExecutionStart2(ctx, execution, reqPayload.StartNode, reqPayload.AgentOutput, reqPayload.Caller)
+	if err != nil {
+		log.Printf("[WARNING][%s] HandleAgentStart2 completed with error: %v", execution.ExecutionId, err)
+	}
+}
+
+// Returns true if any parsed decision is a runnable tool or interaction step rather than "finish".
+func hasRunnableAgentDecisions(parsedDecisions []AgentDecision) bool {
+	for _, decision := range parsedDecisions {
+		if !isFinishDecision(decision) {
+			return true
+		}
+	}
+	return false
+}
+
+// Extracts the final response text from a "finish" decision (checking output/body fields first, then Reason, then rawOutput).
+func extractFinalFinishOutput(parsedDecisions []AgentDecision, rawOutput string) string {
+	for _, decision := range parsedDecisions {
+		if !isFinishDecision(decision) {
+			continue
+		}
+		for _, field := range decision.Fields {
+			fieldKey := strings.ToLower(strings.TrimSpace(field.Key))
+			if (fieldKey == "output" || fieldKey == "body" || fieldKey == "result") && len(strings.TrimSpace(field.Value)) > 0 {
+				return field.Value
+			}
+		}
+		if len(strings.TrimSpace(decision.Reason)) > 0 {
+			return decision.Reason
+		}
+	}
+	return strings.TrimSpace(rawOutput)
+}
+
+// Initializes the agent on Turn 0: logs AI_AGENT_START immediately, validates on-prem AI config, resolves $workflow variables and branch conditions ONCE, and saves initial RUNNING state to DB.
+func initAgentFirstTurn(
+	ctx context.Context,
+	execution WorkflowExecution,
+	startNode Action,
+	agentOutput AgentOutput,
+	callerName string,
+) (WorkflowExecution, Action, AgentOutput, bool, error) {
+	rawParams := parseNodeParams(startNode)
+	originalUserInput := rawParams.UserInput
+
+	// 1. Populate baseline node state BEFORE any validation or variable resolution can abort
+	agentOutput.Status = AgentStateRunning
+	agentOutput.ExecutionId = execution.ExecutionId
+	agentOutput.NodeId = startNode.ID
+	if agentOutput.StartedAt == 0 {
+		agentOutput.StartedAt = time.Now().UnixMilli()
+	}
+	agentOutput.CompletedAt = 0
+	if len(rawParams.UserInput) > 0 {
+		agentOutput.Input = rawParams.UserInput
+	} else if len(agentOutput.Input) == 0 && len(execution.ExecutionArgument) > 0 {
+		agentOutput.Input = execution.ExecutionArgument
+	}
+	if len(originalUserInput) > 0 {
+		agentOutput.OriginalInput = originalUserInput
+	} else if len(agentOutput.OriginalInput) == 0 && len(agentOutput.Input) > 0 {
+		agentOutput.OriginalInput = agentOutput.Input
+	}
+	if len(rawParams.Memory) > 0 {
+		agentOutput.Memory = rawParams.Memory
+	} else if len(agentOutput.Memory) == 0 {
+		agentOutput.Memory = "shuffle_db"
+	}
+	if len(rawParams.Skill) > 0 {
+		agentOutput.Template = rawParams.Skill
+	}
+	if len(rawParams.ExecutionMode) > 0 {
+		agentOutput.ExecutionMode = rawParams.ExecutionMode
+	}
+
+	// 2. Always log AI_AGENT_START once at the very beginning of Turn 0 before any abort can occur
+	initiatedBy := execution.Workflow.UpdatedBy
+	if len(initiatedBy) == 0 {
+		initiatedBy = "system"
+	}
+	log.Printf("[INFO][%s] AI_AGENT_START: org=%s workflow=%s user=%s caller=%s input_length=%d", execution.ExecutionId, execution.Workflow.OrgId, execution.WorkflowId, initiatedBy, callerName, len(agentOutput.Input))
+
+	if !standalone && (execution.Status == "ABORTED" || execution.Status == "FAILURE") {
+		abortedNode, abortErr := abortAgentRun(ctx, execution, startNode, agentOutput, "user_aborted", "Agent run was aborted by user")
+		return execution, abortedNode, agentOutput, true, abortErr
+	}
+
+	// 3. Validate On-Prem AI Configuration
 	if project.Environment == "onprem" {
 		if !evaluateLocalAI(ctx, execution) {
 			onpremAiConfigErr := "To use the AI Agent on-premise, configure your LLM credentials by connecting the OpenAI app in Shuffle App Auth (supports OpenAI and any compatible provider/proxy), or enable Cloud Sync with \"Shuffle Cloud AI\" to run requests through Shuffle Cloud."
 			log.Printf("[ERROR] AI Configuration Error: %s", onpremAiConfigErr)
-			return abortAgentRun(ctx, execution, startNode, AgentOutput{}, "onprem_ai_not_configured", onpremAiConfigErr)
+			abortedNode, abortErr := abortAgentRun(ctx, execution, startNode, agentOutput, "onprem_ai_not_configured", onpremAiConfigErr)
+			return execution, abortedNode, agentOutput, true, abortErr
 		}
 	}
 
-	// prep the system prompt and user prompt and other data here so that we can invoke the llm call
+	// 4. Resolve $workflow variables and branch conditions ONCE
+	resolvedNode, branchSkipped, skipReason := resolveVars(execution, startNode)
+	if branchSkipped {
+		abortedNode, abortErr := abortAgentRun(ctx, execution, startNode, agentOutput, "branch_condition_not_met", skipReason)
+		return execution, abortedNode, agentOutput, true, abortErr
+	}
+	startNode = resolvedNode
+	resolvedParams := parseNodeParams(startNode)
 
-	return startNode, nil
+	// Update fields with resolved parameter values (including if a $var resolved to empty string)
+	if len(rawParams.UserInput) > 0 || len(resolvedParams.UserInput) > 0 {
+		agentOutput.Input = resolvedParams.UserInput
+		if len(agentOutput.Input) == 0 && len(execution.ExecutionArgument) > 0 {
+			agentOutput.Input = execution.ExecutionArgument
+		}
+	}
+	if len(resolvedParams.Memory) > 0 {
+		agentOutput.Memory = resolvedParams.Memory
+	}
+	if len(resolvedParams.Skill) > 0 {
+		agentOutput.Template = resolvedParams.Skill
+	}
+	if len(resolvedParams.ExecutionMode) > 0 {
+		agentOutput.ExecutionMode = resolvedParams.ExecutionMode
+	}
+
+	execution, agentOutput, _, _ = saveAgentStateToDB(ctx, execution, startNode, agentOutput, AgentStateRunning, "")
+
+	return execution, startNode, agentOutput, false, nil
+}
+
+// Checks whether the organization (or its billing parent org) has exceeded its monthly AI token or app execution quota in cloud mode.
+func checkAgentBillingQuota(ctx context.Context, execution WorkflowExecution) (bool, string) {
+	if standalone || len(execution.Workflow.OrgId) == 0 {
+		return false, ""
+	}
+
+	billingOrgId := execution.Workflow.OrgId
+	currentOrg, orgErr := GetOrg(ctx, execution.Workflow.OrgId)
+	billingOrg := currentOrg
+
+	// Bill against the parent org if this is a sub-org.
+	// Check CreatorOrg first, fall back to ManagerOrgs[0] for older sub-orgs.
+	parentOrgId := ""
+	if orgErr == nil && currentOrg != nil {
+		if len(currentOrg.CreatorOrg) > 0 {
+			parentOrgId = currentOrg.CreatorOrg
+		} else if len(currentOrg.ManagerOrgs) > 0 && len(currentOrg.ManagerOrgs[0].Id) > 0 {
+			parentOrgId = currentOrg.ManagerOrgs[0].Id
+		}
+	}
+	if len(parentOrgId) > 0 {
+		parentOrg, parentErr := GetOrg(ctx, parentOrgId)
+		if parentErr == nil && parentOrg != nil && len(parentOrg.Id) > 0 {
+			billingOrgId = parentOrgId
+			billingOrg = parentOrg
+		} else {
+			log.Printf("[WARNING][%s] AI Agent: Failed getting parent org %s, falling back to current org for billing: %v", execution.ExecutionId, parentOrgId, parentErr)
+		}
+	}
+
+	orgStats, statsErr := GetOrgStatistics(ctx, billingOrgId)
+	monthlyAppRuns := int64(0)
+	monthlyLLMTokens := int64(0)
+	if statsErr == nil && orgStats != nil {
+		convertedStats := GetCorrectedStats(orgStats)
+		monthlyAppRuns = convertedStats.MonthlyAppExecutions + convertedStats.MonthlyChildAppExecutions
+		monthlyLLMTokens = convertedStats.MonthlyLLMTokens + convertedStats.MonthlyChildOrgLLMTokens
+	}
+
+	if billingOrg != nil {
+		appRunLimit := int64(billingOrg.SyncFeatures.AppExecutions.Limit)
+		if project.Environment == "cloud" {
+			useTokenOverride := false
+			if expiryMonthStr := os.Getenv("AI_CREDIT_END_MONTH"); len(expiryMonthStr) > 0 {
+				if expiryMonth, convErr := strconv.Atoi(expiryMonthStr); convErr == nil && expiryMonth >= 1 && expiryMonth <= 12 {
+					now := time.Now()
+					expiryDate := time.Date(now.Year(), time.Month(expiryMonth), 1, 0, 0, 0, 0, now.Location())
+					if now.Before(expiryDate) {
+						useTokenOverride = true
+					}
+				}
+			}
+
+			if useTokenOverride {
+				geminiTokenLimit := int64(100_000_000)
+				if os.Getenv("AI_CREDITS") > "" {
+					credVal, convErr := strconv.ParseInt(os.Getenv("AI_CREDITS"), 10, 64)
+					if convErr == nil {
+						geminiTokenLimit = credVal
+					}
+				}
+
+				if monthlyLLMTokens >= geminiTokenLimit {
+					return true, fmt.Sprintf("AI LLM token limit reached: %d >= %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyLLMTokens, geminiTokenLimit)
+				}
+			} else if monthlyAppRuns >= appRunLimit {
+				return true, fmt.Sprintf("AI App limit reached: %d >= %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyAppRuns, appRunLimit)
+			}
+		}
+	}
+
+	return false, ""
+}
+
+// Executes a single agent loop turn: builds prompt/tools/history context, calls the LLM, parses decisions, and either finishes or triggers the tool runner.
+func runAgentTurn(
+	ctx context.Context,
+	execution WorkflowExecution,
+	startNode Action,
+	agentOutput AgentOutput,
+	callerName string,
+) (Action, error) {
+	params := parseNodeParams(startNode)
+	if len(agentOutput.Input) > 0 {
+		params.UserInput = agentOutput.Input
+	}
+
+	if len(strings.TrimSpace(params.UserInput)) == 0 {
+		return abortAgentRun(ctx, execution, startNode, agentOutput, "empty_user_input", "No input provided to AI Agent")
+	}
+
+	// Guard against runaway infinite loops across all turns (default 60 decisions, configurable via AI_AGENT_MAX_STEPS)
+	maxAgentSteps := 60
+	if envMaxSteps := strings.TrimSpace(os.Getenv("AI_AGENT_MAX_STEPS")); len(envMaxSteps) > 0 {
+		if parsedMax, convErr := strconv.Atoi(envMaxSteps); convErr == nil && parsedMax > 0 {
+			maxAgentSteps = parsedMax
+		}
+	}
+	if len(agentOutput.Decisions) >= maxAgentSteps {
+		log.Printf("[ERROR][%s] AI_AGENT_MAX_STEPS_EXCEEDED: org=%s loop_count=%d (cache=%d, decisions=%d)", execution.ExecutionId, execution.Workflow.OrgId, len(agentOutput.Decisions), 0, len(agentOutput.Decisions))
+		go func() {
+			_ = IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_max_loops_hit", 1)
+		}()
+		return abortAgentRun(ctx, execution, startNode, agentOutput, "max_agent_loops_reached", fmt.Sprintf("Agent reached maximum execution steps limit (%d) without finishing.", len(agentOutput.Decisions)))
+	}
+
+	// 1. Build Skill, Tools Context, and Org/User Metadata
+	skillSystemRule, skillContext, requiredApps, updatedRawTools := loadSkill(ctx, params.Skill, params.RawTools, execution)
+	params.RawTools = updatedRawTools
+	decidedApps, allowedActionString, specificAppMetadata := buildToolsContext(ctx, params.RawTools, requiredApps)
+	userMetadata := buildUserMetadata(ctx, execution, decidedApps, specificAppMetadata)
+
+	if len(allowedActionString) > 0 {
+		agentOutput.AllowedActions = strings.Split(allowedActionString, ",")
+	}
+
+	// 2. Build History Context & Guard Against Repeated Identical Tool Failures
+	historyCtx, historyErr := prepareHistoryContext(execution, agentOutput.Decisions)
+	if historyErr != nil {
+		log.Printf("[WARNING][%s] AI Agent: Failed marshalling history context for node %s: %v", execution.ExecutionId, startNode.ID, historyErr)
+	}
+	if historyCtx.ShouldHardAbort {
+		return abortAgentRun(ctx, execution, startNode, agentOutput, "max_retries_exceeded", "Agent stopped after 4 consecutive failed attempts on the same action.")
+	}
+
+	// 3. Check Billing Quota, Build ChatCompletionRequest & Execute LLM Call
+	if quotaExceeded, quotaReason := checkAgentBillingQuota(ctx, execution); quotaExceeded {
+		return abortAgentRun(ctx, execution, startNode, agentOutput, "app_limit_exceeded", quotaReason)
+	}
+
+	systemPrompt := getAgentMainSystemPrompt(params.EnableQuestions)
+	completionRequest := buildCompletionRequest(params, systemPrompt, skillSystemRule, skillContext, userMetadata, historyCtx)
+
+	rawOutput, openaiResponse, llmErr := runAgentLLM(ctx, execution, startNode, params, completionRequest)
+	if llmErr != nil {
+		return abortAgentRun(ctx, execution, startNode, agentOutput, "ai_query_failed", llmErr.Error())
+	}
+
+	agentOutput.LLMCallCount += 1
+	if openaiResponse.Usage.TotalTokens > 0 {
+		agentOutput.TotalTokens += int64(openaiResponse.Usage.TotalTokens)
+		agentOutput.PromptTokens += int64(openaiResponse.Usage.PromptTokens)
+		agentOutput.CompletionTokens += int64(openaiResponse.Usage.CompletionTokens)
+	}
+	agentOutput.LLMRequests = []openai.ChatCompletionRequest{completionRequest}
+	agentOutput.LLMResponses = []openai.ChatCompletionResponse{openaiResponse}
+
+	// 4. Parse LLM Decisions
+	parsedDecisions, cleanedDecisionString, parseErr := parseLLMDecisions(rawOutput, openaiResponse, historyCtx.NextStepIndex)
+	agentOutput.DecisionString = cleanedDecisionString
+	if parseErr != nil || len(parsedDecisions) == 0 {
+		errMsg := "AI Agent returned no valid decisions"
+		if parseErr != nil {
+			errMsg = parseErr.Error()
+		}
+		return abortAgentRun(ctx, execution, startNode, agentOutput, "decision_parse_failed", errMsg)
+	}
+
+	// 5. Route: If any runnable tool or human-in-the-loop decision exists -> hand off to Tool Runner; otherwise -> Finish
+	if hasRunnableAgentDecisions(parsedDecisions) {
+		_, _, toolErr := triggerAgentToolRunner(ctx, execution, startNode, agentOutput, parsedDecisions, callerName)
+		return startNode, toolErr
+	}
+
+	agentOutput.Output = extractFinalFinishOutput(parsedDecisions, rawOutput)
+	return finishAgentRun(ctx, execution, startNode, agentOutput)
+}
+
+// Entry point for the AI Agent: loads state from DB, runs first-turn initialization ONCE on Turn 0, and delegates the active turn to runAgentTurn.
+func HandleAiAgentExecutionStart2(
+	ctx context.Context,
+	execution WorkflowExecution,
+	startNode Action,
+	incomingAgentOutput AgentOutput,
+	callerName string,
+) (Action, error) {
+	if strings.TrimSpace(callerName) == "" {
+		callerName = "unknown"
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// 1. Load existing state from DB (if any)
+	rawParams := parseNodeParams(startNode)
+	var agentOutput AgentOutput
+	execution, startNode, agentOutput = loadAgentStateFromDB(ctx, execution, startNode, rawParams, rawParams.UserInput, "", incomingAgentOutput)
+
+	log.Printf("[INFO][%s] AI Agent: HandleAiAgentExecutionStart2 invoked by caller: '%s' (node=%s, status=%s)", execution.ExecutionId, callerName, startNode.ID, execution.Status)
+
+	// 2. First Turn Initialization (runs ONLY ONCE when there are no prior decisions)
+	if len(agentOutput.Decisions) == 0 {
+		var aborted bool
+		var initErr error
+		execution, startNode, agentOutput, aborted, initErr = initAgentFirstTurn(ctx, execution, startNode, agentOutput, callerName)
+		if aborted || initErr != nil {
+			return startNode, initErr
+		}
+	} else {
+		if !standalone && (execution.Status == "ABORTED" || execution.Status == "FAILURE") {
+			return abortAgentRun(ctx, execution, startNode, agentOutput, "user_aborted", "Agent run was aborted by user")
+		}
+
+		// If any decision is still pending (e.g. just approved by the user, or another decision in the step is still WAITING), hand off to runAgentTools
+		if hasPendingAgentDecisions(agentOutput.Decisions) {
+			_, _, toolErr := triggerAgentToolRunner(ctx, execution, startNode, agentOutput, nil, callerName)
+			return startNode, toolErr
+		}
+	}
+
+	// 3. Execute the current Agent Loop Turn
+	return runAgentTurn(ctx, execution, startNode, agentOutput, callerName)
 }
 
 
-//TODO
+//DONE
 // update the system prompt to tell the LLM to not mix an ask / approval wait with a parallel tool in the same step I
 // the final thing i wanted is somewhat topologically similar to 
 // Then HandleAiAgentExecutionStart2 becomes a crystal-clear ~60-line controller that anyone can read in 10 seconds:
@@ -2045,3 +2778,10 @@ func HandleAiAgentExecutionStart2(execution WorkflowExecution, startNode Action,
 // 	}
 // 	return nil
 // }
+
+// TODO:
+
+//1. https://aiplatform.googleapis.com/v1/projects/shuffler/locations/europe-west2/endpoints/openapi/chat/completions": http2: timeout awaiting response headers
+// interesting bug, our new design should be very resilent with traisent netowklr failures at all layers like TLS tcp, clinet side bs yeah all those
+//2. Clean up the way the HandleAiAgentExecutionStart2 handles decision approved or asking question back as its not at all supposed to run the tools by itself it should liteally needed to send off to runAgentTools
+// 3. there is even more mess in the other functions too we cant merge this at this point like that 
